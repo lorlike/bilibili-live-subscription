@@ -1,0 +1,21 @@
+# 房间清单：每个 [[room]] 是一个直播间
+# id      直播间号（短号 / 长号均可，必填）
+# name    房间名；写 "auto" 或整行省略则在启动时自动查询主播名
+# enabled 是否监听，可省略，默认 true
+
+[[room]]
+id = 652581
+name = "auto"
+
+[[room]]
+id = 6
+name = "哔哩哔哩英雄联盟赛事"
+
+[[room]]
+id = 21452505
+name = "七海Nana7mi"
+
+[[room]]
+id = 3236181
+name = "已禁用示例"
+enabled = false
