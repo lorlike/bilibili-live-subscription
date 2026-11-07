@@ -1,0 +1,490 @@
+:root {
+  --bg: #0b0e0c;
+  --bg-alt: #11150f;
+  --fg: #c8d3c4;
+  --dim: #6b7a67;
+  --green: #7ee787;
+  --cyan: #79d4d8;
+  --amber: #e3b341;
+  --red: #ff7b72;
+  --line: #1f261d;
+  --term: "JetBrains Mono", "SF Mono", "Cascadia Mono", Menlo, Consolas, "Noto Sans Mono CJK SC",
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--term);
+  font-size: 14px;
+  line-height: 1.55;
+  /* 终端扫描线质感 */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.012) 0px,
+    rgba(255, 255, 255, 0.012) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+
+/* ---------- 顶部 / 底部条 ---------- */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.bar.status {
+  border-bottom: none;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.seg {
+  white-space: nowrap;
+}
+
+.title {
+  color: var(--green);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.title::after {
+  content: "_";
+  animation: blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.dim {
+  color: var(--dim);
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ---------- 工具条 ---------- */
+
+.toolbar {
+  gap: 6px;
+}
+
+.key,
+.date {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: #161c15;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.key:hover,
+.date:hover {
+  background: #1d2519;
+  border-color: #2e3a2a;
+  color: var(--green);
+}
+
+.key:active {
+  background: #26301f;
+}
+
+.key.wide {
+  letter-spacing: 0.06em;
+}
+
+.date {
+  color-scheme: dark;
+  cursor: text;
+  min-width: 132px;
+}
+
+.date::-webkit-calendar-picker-indicator {
+  filter: invert(0.65) sepia(0.3) saturate(2) hue-rotate(60deg);
+  cursor: pointer;
+}
+
+/* ---------- 终端主体 ---------- */
+
+.term {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px 40px;
+  scrollbar-width: thin;
+  scrollbar-color: #2b3527 transparent;
+}
+
+.term::-webkit-scrollbar {
+  width: 9px;
+}
+
+.term::-webkit-scrollbar-thumb {
+  background: #2b3527;
+  border-radius: 0;
+}
+
+.lines {
+  display: flex;
+  flex-direction: column;
+}
+
+/* display:flex 会盖掉 hidden 属性的 display:none，这里显式处理 */
+.lines[hidden] {
+  display: none;
+}
+
+/* 每行一条记录，形如终端输出 */
+.row {
+  display: grid;
+  grid-template-columns: 68px 52px minmax(0, 1fr) 48px;
+  gap: 10px;
+  padding: 3px 6px;
+  border-left: 2px solid transparent;
+  animation: row-in 0.22s ease-out;
+  cursor: pointer;
+}
+
+.row .time {
+  color: var(--cyan);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.row:hover {
+  background: #141a12;
+  border-left-color: var(--dim);
+}
+
+.row:focus-visible {
+  outline: 1px dashed var(--green);
+  outline-offset: -1px;
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+.row .time {
+  color: var(--cyan);
+}
+
+.row .marker {
+  color: var(--red);
+  white-space: nowrap;
+}
+
+.row .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row .name .room-id {
+  color: var(--dim);
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.row .meta {
+  color: var(--dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* 展开的详情 */
+.detail {
+  display: none;
+  grid-column: 1 / -1;
+  margin: 4px 0 8px 2ch;
+  padding: 6px 10px;
+  border-left: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 12px;
+  cursor: default;
+}
+
+.row.open .detail {
+  display: block;
+}
+
+.detail b {
+  color: var(--fg);
+  font-weight: 400;
+}
+
+/* 提示 / 空状态 */
+.hint {
+  color: var(--dim);
+  padding: 4px 6px;
+}
+
+.hint::before {
+  content: "$ ";
+  color: var(--green);
+}
+
+.empty {
+  color: var(--dim);
+  padding: 24px 6px;
+  text-align: center;
+  line-height: 1.9;
+}
+
+.empty .big {
+  color: var(--fg);
+  font-size: 15px;
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* 连接状态 */
+#conn.ok {
+  color: var(--green);
+}
+
+#conn.ok::before {
+  content: "● ";
+}
+
+#conn.bad {
+  color: var(--amber);
+}
+
+#conn.bad::before {
+  content: "○ ";
+}
+
+/* 新记录高亮 */
+.row.fresh .name {
+  color: var(--green);
+}
+
+.row.fresh {
+  background: #16211a;
+}
+
+@media (max-width: 620px) {
+  body {
+    font-size: 13px;
+  }
+
+  /* 窄屏只保留时间与房间名，房间号换到小字里。
+     注意用 :not(.room-row) 排除房间清单行，它有自己的一套列布局。 */
+  .row:not(.room-row) {
+    grid-template-columns: 60px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .row:not(.room-row) .marker,
+  .row:not(.room-row) .meta {
+    display: none;
+  }
+
+  .row:not(.room-row) .name {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .row:not(.room-row) .name .room-id {
+    margin-left: 0;
+  }
+}
+
+/* ---------- 房间清单视图 ---------- */
+
+.rooms-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.rooms-view[hidden] {
+  display: none;
+}
+
+/* 表头：与每行列宽一致 */
+.rooms-head,
+.row.room-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 56px 118px 64px;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.rooms-head {
+  padding: 0 6px 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.head-cell.c-count,
+.head-cell.c-ago {
+  text-align: right;
+}
+
+.head-cell.c-dot,
+.head-cell.c-name {
+  text-align: left;
+}
+
+.head-cell.c-last {
+  text-align: right;
+}
+
+/* 清单行：去掉记录的入场动画，避免切换视图时闪 */
+.row.room-row {
+  animation: none;
+  padding: 4px 6px;
+}
+
+.row.room-row .dot {
+  color: var(--green);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.row.room-row.disabled .dot,
+.row.room-row.orphaned .dot {
+  color: var(--dim);
+}
+
+.row.room-row.disabled .name-text {
+  color: var(--dim);
+}
+
+.row.room-row.orphaned .name-text {
+  color: var(--amber);
+  font-style: italic;
+}
+
+.row.room-row .name-text.auto {
+  color: var(--cyan);
+  font-style: italic;
+}
+
+.row.room-row .meta {
+  text-align: right;
+}
+
+/* 「→」跳转小按钮 */
+.row.room-row .jump {
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.row.room-row .jump:hover {
+  color: var(--green);
+}
+
+/* 分组分隔 */
+.divider {
+  margin: 12px 0 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+/* toolbar 按钮的激活态（toggle 按下） */
+.key.active {
+  color: var(--green);
+  border-color: #2e3a2a;
+  background: #1d2519;
+  box-shadow: inset 0 0 0 1px #2a3628;
+}
+
+/* toggle 按下时在文字前加一个小方块，一眼看出是「已开启」 */
+.key.active::before {
+  content: "▪ ";
+  color: var(--green);
+}
+
+.key:disabled,
+.date:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.key:disabled:hover,
+.date:disabled:hover {
+  background: #161c15;
+  border-color: var(--line);
+  color: var(--fg);
+}
+
+@media (max-width: 620px) {
+  /* 窄屏：状态点 + 房间名 + 次数（「最近开播」和「距今」塞不下，靠详情看） */
+  .rooms-head,
+  .row.room-row {
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  /* 表头只有「监听/房间」两列有意义，18px 放不下两个字，整行隐藏 */
+  .rooms-head {
+    display: none;
+  }
+
+  /* 第 4 列（最近开播）与第 5 列（距今）在窄屏隐藏 */
+  .row.room-row > span:nth-child(4),
+  .row.room-row > span:nth-child(5) {
+    display: none;
+  }
+
+  .row.room-row {
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+
+  /* 次数靠右，和设备左对齐的圆点形成两端 */
+  .row.room-row > span:nth-child(3) {
+    justify-self: end;
+  }
+}
+
