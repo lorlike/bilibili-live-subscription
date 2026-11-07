@@ -1,0 +1,44 @@
+{
+  "name": "bilibili-live-subscription",
+  "version": "1.0.0",
+  "description": "监听 B 站直播间开播并持久化记录",
+  "type": "module",
+  "main": "src/cli.ts",
+  "bin": {
+    "bls": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "tsx src/cli.ts watch",
+    "serve": "tsx src/cli.ts serve",
+    "list": "tsx src/cli.ts list",
+    "today": "tsx src/cli.ts today",
+    "rooms": "tsx src/cli.ts rooms",
+    "seed": "tsx src/seed.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "info": "tsx src/cli.ts info"
+  },
+  "keywords": [
+    "bilibili",
+    "live",
+    "subscription"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^18.0.9",
+    "smol-toml": "^1.9.1",
+    "tiny-bilibili-ws": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "packageManager": "pnpm@12.18.0",
+  "files": [
+    "src"
+  ]
+}
