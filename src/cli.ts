@@ -1,45 +1,62 @@
 #!/usr/bin/env node
 import process from 'node:process'
-import { SubscriptionApp, formatRecord } from './app.ts'
-import { fetchRoomInfo, fetchRoomsInfo } from './bilibili.ts'
+import { SubscriptionApp } from './app.ts'
 import { config } from './config.ts'
 import { describeError, logger } from './logger.ts'
-import { loadRooms } from './rooms.ts'
-import { WebServer } from './server.ts'
+import { RoomRepo } from './repo/rooms.ts'
+import { UserRepo } from './repo/users.ts'
+import { WebServer } from './server.tsx'
 import { LiveStore } from './store.ts'
-import { todayRange } from './time.ts'
 
 function usage(): void {
   console.log(`bilibili-live-subscription
 
 用法:
-  pnpm start                监听清单中的全部房间并存库（含 Web 界面）
-  pnpm run serve            只启动 Web 界面（只读数据库）
-  pnpm run list             在终端查看最近的开播记录
-  pnpm run today            在终端查看今天的开播记录
-  pnpm run info [房间号...]  查询直播间的标题与主播名
-  pnpm run rooms            校验并打印房间清单
-  pnpm run seed             写入一批演示数据（便于查看界面效果）
+  pnpm dev                  启动完整服务（Web + 监听，同一个进程）
+  pnpm start                同上，但按生产模式跑（cookie 加 Secure）
+  pnpm build                构建前端（改过 web/ 后必须跑）
 
-选项:
-  --no-web                  只监听，不启动 Web 界面
-  --port <n>                Web 端口（默认 $WEB_PORT）
+分开跑（可选，用于独立重启其中一方）:
+  WEB_ONLY=1 pnpm web       只启动 Web
+  pnpm listen               只启动监听（无端口）
+
+注：pnpm web 与 pnpm dev 等价，都包含监听。
+
+管理:
+  pnpm user:add <用户名> <密码>   创建用户（首次需手动建一个）
+  pnpm user:list                  列出用户
+
+只读命令:
+  pnpm list [n]             查看最近的开播记录
+  pnpm today                查看今天的开播记录
+  pnpm info [房间号...]      查询直播间的标题与主播名
+  pnpm rooms                列出数据库里的房间
+
+构建:
+  pnpm build                构建前端
+  pnpm typecheck            类型检查
+  pnpm test                 单元测试
 
 环境变量见 .env.example
 `)
 }
 
-function flagValue(name: string): string | undefined {
-  const index = process.argv.indexOf(name)
-  if (index === -1) return undefined
-  return process.argv[index + 1]
+function open(): { store: LiveStore; rooms: RoomRepo; users: UserRepo } {
+  const store = new LiveStore(config.dbPath)
+  return {
+    store,
+    rooms: new RoomRepo(store.db),
+    users: new UserRepo(store.db),
+  }
 }
 
+// ---------- 只读命令 ----------
+
 function runList(): void {
-  const store = new LiveStore(config.dbPath)
+  const { store } = open()
   try {
-    const limit = Number(process.argv[3] ?? 20)
-    const records = store.recent(Number.isFinite(limit) && limit > 0 ? limit : 20)
+    const limit = clampInt(process.argv[3], 1, 500, 20)
+    const records = store.recent(limit)
 
     if (records.length === 0) {
       console.log('暂无开播记录')
@@ -47,7 +64,9 @@ function runList(): void {
     }
 
     for (const record of records) {
-      console.log(`#${String(record.id).padStart(4, '0')}  ${formatRecord(record)}`)
+      const d = new Date(record.liveTime * 1000)
+      const time = d.toLocaleString('zh-CN', { hour12: false })
+      console.log(`#${String(record.id).padStart(4, '0')}  ${time}  ${record.roomName}(${record.roomId})`)
     }
   } finally {
     store.close()
@@ -55,63 +74,69 @@ function runList(): void {
 }
 
 function runToday(): void {
-  const store = new LiveStore(config.dbPath)
+  const { store } = open()
   try {
-    const range = todayRange()
-    const records = store.recordsBetween(range.start, range.end)
+    const now = new Date()
+    const start = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000)
+    const records = store.recordsBetween(start, start + 86400)
 
-    console.log(`── ${range.date} ──`)
+    console.log(`── ${now.toISOString().slice(0, 10)} ──`)
     if (records.length === 0) {
       console.log('今天还没有开播记录')
       return
     }
 
-    const pad2 = (n: number) => String(n).padStart(2, '0')
     for (const record of records) {
       const d = new Date(record.liveTime * 1000)
-      const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+      const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
       const title = record.title ? `  ${record.title}` : ''
-      console.log(`${time}  ▶ live  ${record.roomName}  #${record.roomId}${title}`)
+      console.log(`${time}  ▶  ${record.roomName}  #${record.roomId}${title}`)
     }
-    console.log(`\n共 ${records.length} 条，涉及 ${new Set(records.map((r) => r.roomId)).size} 个房间`)
+
+    console.log(`\n共 ${records.length} 条`)
   } finally {
     store.close()
   }
 }
 
-function runInfo(): void {
-  // 支持 info 652581、info 6 21452505、多个逗号分隔
-  const args = process.argv.slice(3).flatMap((arg) => arg.split(','))
-  const ids = args
+function runRooms(): void {
+  const { store, rooms } = open()
+  try {
+    const list = rooms.list()
+    console.log(`数据库中的房间（共 ${list.length} 个）`)
+    for (const room of list) {
+      const flags = [room.enabled ? '启用' : '禁用'].join(' ')
+      console.log(`- ${room.name ?? room.anchorName ?? '(未取名)'}(${room.id}) [${flags}]`)
+    }
+  } finally {
+    store.close()
+  }
+}
+
+async function runInfo(): Promise<void> {
+  const { fetchRoomsInfo } = await import('./bilibili.ts')
+  const ids = process.argv
+    .slice(3)
+    .flatMap((arg) => arg.split(','))
     .map((arg) => Number(arg.trim()))
     .filter((id) => Number.isInteger(id) && id > 0)
 
   if (ids.length === 0) {
-    // 没给房间号就查清单里的全部房间
-    let rooms
+    const { store, rooms } = open()
     try {
-      rooms = loadRooms(config.roomsFile)
-    } catch (error) {
-      logger.error(describeError(error))
-      process.exit(1)
+      ids.push(...rooms.list().map((room) => room.id))
+    } finally {
+      store.close()
     }
+  }
 
-    if (rooms.length === 0) {
-      console.log('房间清单为空，用法: pnpm run info <房间号> [房间号...]')
-      return
-    }
-
-    void printRoomInfo(rooms.map((room) => room.id))
+  if (ids.length === 0) {
+    console.log('用法: pnpm info <房间号> [房间号...]')
     return
   }
 
-  void printRoomInfo(ids)
-}
-
-async function printRoomInfo(ids: number[]): Promise<void> {
   const results = await fetchRoomsInfo(ids, { cookie: config.cookie })
-  const pad = (text: string, width: number) =>
-    text + ' '.repeat(Math.max(0, width - [...text].length))
+  const pad = (text: string, width: number) => text + ' '.repeat(Math.max(0, width - [...text].length))
 
   console.log(`${pad('房间号', 12)}${pad('主播', 22)}${pad('状态', 8)}标题`)
   console.log('─'.repeat(96))
@@ -123,102 +148,177 @@ async function printRoomInfo(ids: number[]): Promise<void> {
     }
 
     const status = info.liveStatus === 1 ? '直播中' : '未开播'
-    const idText =
-      info.shortId && info.shortId !== info.roomId ? `${info.roomId}(${info.shortId})` : `${info.roomId}`
-
     console.log(
-      `${pad(idText, 12)}${pad(info.anchorName ?? '—', 22)}${pad(status, 8)}${info.title || '（无标题）'}`,
+      `${pad(String(info.roomId), 12)}${pad(info.anchorName ?? '—', 22)}${pad(status, 8)}${info.title || '（无标题）'}`,
     )
   }
 }
 
-function runRooms(): void {
-  const rooms = loadRooms(config.roomsFile)
-  console.log(`房间清单: ${config.roomsFile}（共 ${rooms.length} 个）`)
-  for (const room of rooms) {
-    const name = room.name ?? '(启动时自动查询主播名)'
-    console.log(`- ${name}(${room.id})${room.enabled ? '' : ' [已禁用]'}`)
+// ---------- 用户管理 ----------
+
+async function runUserAdd(): Promise<void> {
+  const [, , , username, password] = process.argv
+
+  if (!username || !password) {
+    console.error('用法: pnpm user:add <用户名> <密码>')
+    process.exit(1)
+  }
+  if (password.length < 8) {
+    console.error('密码至少 8 位')
+    process.exit(1)
+  }
+
+  const { store, users } = open()
+  try {
+    if (users.findByUsername(username)) {
+      console.error(`用户 ${username} 已存在`)
+      process.exit(1)
+    }
+
+    const user = await users.create(username, password)
+    console.log(`已创建用户 ${user.username}（id=${user.id}）`)
+  } finally {
+    store.close()
   }
 }
 
-async function startWebServer(portOverride?: number): Promise<WebServer> {
+function runUserList(): void {
+  const { store, users } = open()
+  try {
+    const list = users.list()
+    if (list.length === 0) {
+      console.log('还没有用户。用 pnpm user:add <用户名> <密码> 创建一个')
+      return
+    }
+    for (const user of list) {
+      console.log(`- ${user.username}（id=${user.id}）`)
+    }
+  } finally {
+    store.close()
+  }
+}
+
+// ---------- 服务 ----------
+
+/** 首次启动且没有用户时，随机生成一个管理员密码并打印（避免裸奔） */
+async function ensureFirstUser(users: UserRepo): Promise<void> {
+  if (users.count() > 0) return
+
+  const { randomBytes } = await import('node:crypto')
+  const password = randomBytes(9).toString('base64url')
+
+  await users.create('admin', password)
+
+  logger.warn(
+    [
+      '首次启动：已创建管理员账号',
+      '  用户名: admin',
+      `  密码:   ${password}`,
+      '  请登录后立即修改密码（或用 pnpm user:add 另建账号后删除它）',
+    ].join('\n'),
+  )
+}
+
+async function runWeb(): Promise<void> {
+  const { store, rooms, users } = open()
+  await ensureFirstUser(users)
+
+  // WEB_ONLY=1 时纯 Web，不启动监听（分进程部署）
+  const app = config.webOnly
+    ? null
+    : new SubscriptionApp({
+        config,
+        store,
+        rooms,
+        syncIntervalMs: config.syncIntervalMs,
+      })
+
   const server = new WebServer({
     config,
-    port: portOverride ?? config.webPort,
+    store,
+    rooms,
+    users,
+    app,
+    port: config.webPort,
     host: config.webHost,
   })
 
   const port = await server.listen()
   logger.info(`Web 界面: http://${config.webHost}:${port}`)
-  return server
-}
 
-async function runWatch(): Promise<void> {
-  const store = new LiveStore(config.dbPath)
-  const app = new SubscriptionApp(config, store)
+  if (app) {
+    await app.start()
+  } else {
+    logger.info('纯 Web 模式（WEB_ONLY=1），不启动监听')
+  }
 
-  const withWeb = !process.argv.includes('--no-web')
-  const portOverride = flagValue('--port')
-  const web = withWeb
-    ? await startWebServer(portOverride === undefined ? undefined : Number(portOverride))
-    : null
-
-  // 监听进程写入新记录后，立刻推给 Web 前端
-  app.onRecord = (record) => web?.publish(record)
-
-  let shuttingDown = false
   const shutdown = async (signal: string) => {
-    if (shuttingDown) return
-    shuttingDown = true
-    logger.info(`收到 ${signal}，正在停止监听`)
-    app.stop()
+    logger.info(`收到 ${signal}，正在停止`)
+    app?.stop()
+    await server.close()
     store.close()
-    await web?.close()
     process.exit(0)
   }
 
   process.on('SIGINT', () => void shutdown('SIGINT'))
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
+}
+
+async function runListen(): Promise<void> {
+  const { store, rooms } = open()
+
+  const app = new SubscriptionApp({
+    config,
+    store,
+    rooms,
+    syncIntervalMs: config.syncIntervalMs,
+  })
+
+  await app.start()
+
+  const shutdown = (signal: string) => {
+    logger.info(`收到 ${signal}，正在停止监听`)
+    app.stop()
+    store.close()
+    process.exit(0)
+  }
+
+  process.on('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
 
   process.on('unhandledRejection', (reason) => {
     logger.error(`未处理的 Promise 拒绝: ${describeError(reason)}`)
   })
-
-  await app.start()
 }
 
-async function runServe(): Promise<void> {
-  const web = await startWebServer(
-    flagValue('--port') === undefined ? undefined : Number(flagValue('--port')),
-  )
-
-  const shutdown = async (signal: string) => {
-    logger.info(`收到 ${signal}，正在停止 Web 服务`)
-    await web.close()
-    process.exit(0)
-  }
-
-  process.on('SIGINT', () => void shutdown('SIGINT'))
-  process.on('SIGTERM', () => void shutdown('SIGTERM'))
+function clampInt(value: string | undefined, min: number, max: number, fallback: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(max, Math.max(min, Math.trunc(parsed)))
 }
 
 function main(): void {
-  const command = process.argv[2] ?? 'watch'
+  const command = process.argv[2] ?? 'web'
+
+  const asyncRun = (fn: () => Promise<void>) => {
+    void fn().catch((error) => {
+      logger.error(`启动失败: ${describeError(error)}`)
+      process.exit(1)
+    })
+  }
 
   switch (command) {
-    case 'watch':
-    case 'start':
-      void runWatch().catch((error) => {
-        logger.error(`启动失败: ${describeError(error)}`)
-        process.exit(1)
-      })
-      break
-    case 'serve':
+    case 'dev':
     case 'web':
-      void runServe().catch((error) => {
-        logger.error(`启动失败: ${describeError(error)}`)
-        process.exit(1)
-      })
+      asyncRun(runWeb)
+      break
+    case 'start':
+      // 生产模式：cookie 加 Secure（要求 https 或 localhost）
+      process.env.NODE_ENV = 'production'
+      asyncRun(runWeb)
+      break
+    case 'listen':
+      asyncRun(runListen)
       break
     case 'list':
       runList()
@@ -226,11 +326,17 @@ function main(): void {
     case 'today':
       runToday()
       break
-    case 'info':
-      runInfo()
-      break
     case 'rooms':
       runRooms()
+      break
+    case 'info':
+      asyncRun(runInfo)
+      break
+    case 'user:add':
+      asyncRun(runUserAdd)
+      break
+    case 'user:list':
+      runUserList()
       break
     case '-h':
     case '--help':

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import 'dotenv/config'
 
 function str(key: string, fallback = ''): string {
@@ -23,7 +24,6 @@ export const config = {
    */
   uid: num('UID', 0),
   /** 房间清单文件 */
-  roomsFile: str('ROOMS_FILE', 'rooms.toml'),
   /** SQLite 数据库文件 */
   dbPath: str('DB_PATH', 'data/live.db'),
   /** 记录保留天数，0 表示永久保留 */
@@ -38,6 +38,16 @@ export const config = {
   heartbeatTime: num('HEARTBEAT_TIME', 30000),
   /** 日志级别 */
   logLevel: str('LOG_LEVEL', 'info'),
+
+  /** JWT 签名密钥；未配置时用随机值（重启后所有会话失效） */
+  jwtSecret: str('JWT_SECRET') || randomBytes(32).toString('hex'),
+  /** JWT 有效期（小时） */
+  jwtTtlHours: num('JWT_TTL_HOURS', 24),
+
+  /** 只启动 Web（不监听），用于分进程部署 */
+  webOnly: str('WEB_ONLY') === '1',
+  /** 监听进程与数据库同步房间的间隔（毫秒），0 表示不自动同步 */
+  syncIntervalMs: num('SYNC_INTERVAL_MS', 5000),
 }
 
 export type AppConfig = typeof config

@@ -1,5 +1,4 @@
 import type { AppConfig } from './config.ts'
-import type { RoomConfig } from './rooms.ts'
 import type { LIVE, Message } from 'tiny-bilibili-ws'
 import { KeepLiveWS } from 'tiny-bilibili-ws'
 import { describeError, logger } from './logger.ts'
@@ -34,8 +33,12 @@ export function parseLiveMessage(
   }
 }
 
-/** 名字已确定的房间（清单里的 name 可能为空，启动前会补全） */
-export type ResolvedRoom = RoomConfig & { name: string }
+/** 监听所需的最小房间信息（名字已补全） */
+export interface ResolvedRoom {
+  id: number
+  name: string
+  enabled: boolean
+}
 
 export class RoomMonitor {
   readonly room: ResolvedRoom

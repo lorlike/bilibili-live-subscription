@@ -1,37 +1,21 @@
+import type { AppConfig } from '../src/config.ts'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
-import type { AppConfig } from '../src/config.ts'
-import type { WebServer } from '../src/server.ts'
-import { WebServer as Server } from '../src/server.ts'
+import { RoomRepo } from '../src/repo/rooms.ts'
+import { UserRepo } from '../src/repo/users.ts'
+import { WebServer } from '../src/server.tsx'
 import { LiveStore } from '../src/store.ts'
 import { dayRange } from '../src/time.ts'
 
-const dir = mkdtempSync(join(tmpdir(), 'bls-web-'))
+const dir = mkdtempSync(join(tmpdir(), 'bls-ssr-'))
 const dbPath = join(dir, 'test.db')
-
-// 测试用清单，写在临时目录里，不依赖仓库中的 rooms.toml
-const roomsFile = join(dir, 'rooms.toml')
-writeFileSync(
-  roomsFile,
-  `
-[[room]]
-id = 1
-name = "房间一"
-
-[[room]]
-id = 2
-name = "auto"
-enabled = false
-`,
-)
 
 const config: AppConfig = {
   cookie: '',
   uid: 0,
-  roomsFile,
   dbPath,
   retentionDays: 0,
   webHost: '127.0.0.1',
@@ -39,219 +23,264 @@ const config: AppConfig = {
   reconnectTime: 5000,
   heartbeatTime: 30000,
   logLevel: 'error',
+  jwtSecret: 'test-secret',
+  jwtTtlHours: 24,
+  webOnly: true,
+  syncIntervalMs: 0,
 }
 
 let server: WebServer
+let store: LiveStore
+let rooms: RoomRepo
+let users: UserRepo
 let base = ''
+let cookie = ''
 
 before(async () => {
-  server = new Server({ config, port: 0, host: '127.0.0.1' })
+  store = new LiveStore(dbPath)
+  rooms = new RoomRepo(store.db)
+  users = new UserRepo(store.db)
+  await users.create('tester', 'password123')
+
+  server = new WebServer({ config, store, rooms, users, app: null, port: 0, host: '127.0.0.1' })
   const port = await server.listen()
   base = `http://127.0.0.1:${port}`
+
+  const res = await fetch(`${base}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'username=tester&password=password123',
+    redirect: 'manual',
+  })
+
+  assert.equal(res.status, 303)
+  cookie = (res.headers.get('set-cookie') ?? '').split(';')[0]!
 })
 
 after(async () => {
   await server.close()
+  store.close()
 })
 
-test('GET / 返回终端页面', async () => {
-  const res = await fetch(`${base}/`)
+/** 带登录态的 GET，不自动跟随重定向 */
+function get(path: string, withAuth = true): Promise<Response> {
+  return fetch(`${base}${path}`, {
+    headers: withAuth ? { cookie } : {},
+    redirect: 'manual',
+  })
+}
+
+/** 表单 POST */
+function post(path: string, fields: Record<string, string>, withAuth = true): Promise<Response> {
+  return fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      ...(withAuth ? { cookie } : {}),
+    },
+    body: new URLSearchParams(fields).toString(),
+    redirect: 'manual',
+  })
+}
+
+// ---------- 服务端渲染 ----------
+
+test('登录页由服务端渲染成完整 HTML', async () => {
+  const res = await get('/login', false)
   assert.equal(res.status, 200)
   assert.match(res.headers.get('content-type') ?? '', /text\/html/)
+
   const html = await res.text()
-  assert.match(html, /id="lines"/)
-  assert.match(html, /app\.js/)
+  assert.match(html, /<form class="login"/)
+  assert.match(html, /name="username"/)
+  assert.match(html, /name="password"/)
+  // 是完整文档，不是挂载点
+  assert.match(html, /^<!DOCTYPE html>|<html/i)
+  assert.doesNotMatch(html, /id="root"/)
 })
 
-test('静态资源可访问，且目录穿越被拒绝', async () => {
-  assert.equal((await fetch(`${base}/style.css`)).status, 200)
-  assert.equal((await fetch(`${base}/app.js`)).status, 200)
-  assert.equal((await fetch(`${base}/nope.js`)).status, 404)
+test('/ 重定向到 /records', async () => {
+  const res = await get('/', false)
+  assert.equal(res.status, 302)
+  assert.equal(res.headers.get('location'), '/records')
+})
 
-  const escaped = await fetch(`${base}/../package.json`)
+test('CSS 可访问，目录穿越被拒绝', async () => {
+  assert.equal((await get('/style.css', false)).status, 200)
+
+  const escaped = await get('/../package.json', false)
   assert.notEqual(escaped.status, 200)
 })
 
-test('POST 被拒绝', async () => {
-  const res = await fetch(`${base}/api/records`, { method: 'POST' })
-  assert.equal(res.status, 405)
-})
+// ---------- 鉴权 ----------
 
-test('/api/records 需要合法日期', async () => {
-  const bad = await fetch(`${base}/api/records?date=2026-02-31`)
-  assert.equal(bad.status, 400)
-
-  const ok = await fetch(`${base}/api/records?date=2026-11-07`)
-  assert.equal(ok.status, 200)
-  const body = (await ok.json()) as { date: string; records: unknown[] }
-  assert.equal(body.date, '2026-11-07')
-  assert.ok(Array.isArray(body.records))
-})
-
-test('/api/records 只返回当天记录并按时间正序', async () => {
-  const range = dayRange(new Date(2026, 11, 25))
-  const store = new LiveStore(dbPath)
-  try {
-    store.insertLive({ roomId: 1, roomName: 'A', liveTime: range.start - 100, liveKey: 'x' })
-    store.insertLive({ roomId: 1, roomName: 'A', liveTime: range.start + 300, liveKey: 'b' })
-    store.insertLive({ roomId: 2, roomName: 'B', liveTime: range.start + 100, liveKey: 'a' })
-  } finally {
-    store.close()
-  }
-
-  const body = (await (await fetch(`${base}/api/records?date=2026-12-25`)).json()) as {
-    total: number
-    rooms: number
-    records: Array<{ liveKey: string }>
-  }
-  assert.equal(body.total, 2)
-  assert.equal(body.rooms, 2)
-  assert.deepEqual(
-    body.records.map((r) => r.liveKey),
-    ['a', 'b'],
-  )
-})
-
-test('/api/meta 返回当日与总数', async () => {
-  const body = (await (await fetch(`${base}/api/meta?date=2026-12-25`)).json()) as {
-    date: string
-    total: number
-    all: number
-  }
-  assert.equal(body.date, '2026-12-25')
-  assert.equal(body.total, 2)
-  assert.equal(typeof body.all, 'number')
-})
-
-test('/api/stream 返回 SSE 并支持实时推送', async () => {
-  const controller = new AbortController()
-  const res = await fetch(`${base}/api/stream?date=2026-12-25`, { signal: controller.signal })
-  assert.equal(res.status, 200)
-  assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/)
-
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
-
-  const readSome = async (needle: string, timeoutMs = 4000): Promise<string> => {
-    const deadline = Date.now() + timeoutMs
-    let buffer = ''
-    while (Date.now() < deadline) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      if (buffer.includes(needle)) return buffer
-    }
-    throw new Error(`未在 ${timeoutMs}ms 内收到 ${needle}`)
-  }
-
-  const ready = await readSome('event: ready')
-  assert.match(ready, /2026-12-25/)
-
-  // 另一个连接写入新记录，应通过轮询推送过来
-  const range = dayRange(new Date(2026, 11, 25))
-  const store = new LiveStore(dbPath)
-  try {
-    store.insertLive({ roomId: 3, roomName: 'C', liveTime: range.start + 999, liveKey: 'pushed' })
-  } finally {
-    store.close()
-  }
-
-  const pushed = await readSome('event: record', 6000)
-  assert.match(pushed, /"liveKey":"pushed"/)
-
-  controller.abort()
-})
-
-test('同一 id 的补全记录会被再次推送（用于刷新标题）', async () => {
-  const controller = new AbortController()
-  const res = await fetch(`${base}/api/stream?date=2026-12-25`, { signal: controller.signal })
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
-
-  const readUntil = async (needle: string, timeoutMs = 6000): Promise<string> => {
-    const deadline = Date.now() + timeoutMs
-    let buffer = ''
-    while (Date.now() < deadline) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      if (buffer.includes(needle)) return buffer
-    }
-    throw new Error(`未收到 ${needle}`)
-  }
-
-  await readUntil('event: ready')
-
-  const range = dayRange(new Date(2026, 11, 25))
-  const store = new LiveStore(dbPath)
-  let updated
-  try {
-    store.insertLive({ roomId: 4, roomName: 'D', liveTime: range.start + 1234, liveKey: 'enrich' })
-    const record = store.lastLive(4)!
-    updated = store.updateTitle(record.id, '补全后的标题', '主播D')!
-  } finally {
-    store.close()
-  }
-
-  // 直接调用 publish 两次（模拟落库 + 补全）
-  server.publish({ ...updated, title: '' })
-  server.publish(updated)
-
-  const text = await readUntil('补全后的标题')
-  assert.match(text, /"id":\d+/)
-  controller.abort()
-})
-
-
-test('/api/rooms 返回清单与每个房间的统计', async () => {
-  const body = (await (await fetch(`${base}/api/rooms`)).json()) as {
-    roomsFile: string
-    total: number
-    enabled: number
-    records: number
-    rooms: Array<{
-      id: number
-      name: string | null
-      enabled: boolean
-      recordCount: number
-      lastLive: number | null
-      firstLive: number | null
-    }>
-    orphaned: Array<{ id: number; recordCount: number; orphaned?: boolean }>
-  }
-
-  assert.equal(body.roomsFile, roomsFile)
-  assert.equal(body.total, 2)
-  assert.equal(body.enabled, 1)
-  assert.equal(body.rooms[0]!.id, 1)
-  assert.equal(body.rooms[0]!.name, '房间一')
-  assert.equal(body.rooms[1]!.name, null, 'name = "auto" 应为 null')
-  assert.equal(body.rooms[1]!.enabled, false)
-  assert.equal(typeof body.records, 'number')
-
-  // 清单里的房间都应在结果中，且带统计字段
-  for (const room of body.rooms) {
-    assert.equal(typeof room.id, 'number')
-    assert.equal(typeof room.enabled, 'boolean')
-    assert.equal(typeof room.recordCount, 'number')
-    assert.ok(room.lastLive === null || typeof room.lastLive === 'number')
+test('未登录访问页面会被重定向到 /login', async () => {
+  for (const path of ['/records', '/rooms', '/users']) {
+    const res = await get(path, false)
+    assert.equal(res.status, 303, path)
+    assert.equal(res.headers.get('location'), '/login', path)
   }
 })
 
-test('/api/rooms 在清单不存在时返回 500 且带错误信息', async () => {
-  const broken = new Server({
-    config: { ...config, roomsFile: 'this-file-does-not-exist.toml' },
-    port: 0,
-    host: '127.0.0.1',
+test('密码错误时返回 401 并重新渲染登录页', async () => {
+  const res = await post('/login', { username: 'tester', password: 'wrong' }, false)
+  assert.equal(res.status, 401)
+
+  const html = await res.text()
+  assert.match(html, /用户名或密码错误/)
+  // 保留用户输入的用户名
+  assert.match(html, /value="tester"/)
+})
+
+test('用户不存在与密码错误返回相同响应，不泄漏用户是否存在', async () => {
+  const wrongPass = await post('/login', { username: 'tester', password: 'x' }, false)
+  const noUser = await post('/login', { username: 'ghost', password: 'x' }, false)
+
+  assert.equal(wrongPass.status, 401)
+  assert.equal(noUser.status, 401)
+
+  const a = await wrongPass.text()
+  const b = await noUser.text()
+  // 只有回填的用户名不同，错误文案要一致
+  assert.match(a, /用户名或密码错误/)
+  assert.match(b, /用户名或密码错误/)
+})
+
+test('伪造的 token 无效', async () => {
+  const res = await fetch(`${base}/records`, {
+    headers: { cookie: 'bls_token=forged.value' },
+    redirect: 'manual',
   })
-  const port = await broken.listen()
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/rooms`)
-    assert.equal(res.status, 500)
-    const body = (await res.json()) as { error: string; roomsFile: string }
-    assert.match(body.error, /无法读取房间清单/)
-    assert.equal(body.roomsFile, 'this-file-does-not-exist.toml')
-  } finally {
-    await broken.close()
+  assert.equal(res.status, 303)
+  assert.equal(res.headers.get('location'), '/login')
+})
+
+test('登出清空 cookie 并跳回登录页', async () => {
+  const res = await post('/logout', {})
+  assert.equal(res.status, 303)
+  assert.equal(res.headers.get('location'), '/login')
+
+  const setCookie = res.headers.get('set-cookie') ?? ''
+  assert.match(setCookie, /bls_token=;/)
+  assert.match(setCookie, /Max-Age=0/)
+})
+
+// ---------- 记录页 ----------
+
+test('记录页渲染出当天记录，用 details 实现展开', async () => {
+  const range = dayRange(new Date(2026, 11, 25))
+  for (let i = 0; i < 3; i++) {
+    const record = store.insertLive({
+      roomId: 1,
+      roomName: '测试房间',
+      liveTime: range.start + i * 100,
+      liveKey: `k${i}`,
+    })
+    if (record) store.updateTitle(record.id, `标题${i}`, '主播名')
   }
+
+  const res = await get('/records?date=2026-12-25')
+  assert.equal(res.status, 200)
+
+  const html = await res.text()
+  assert.match(html, /<details class="row rec-row"/)
+  assert.match(html, /测试房间/)
+  assert.match(html, /1–3 \/ 3/)
+  assert.match(html, /标题0/)
+})
+
+test('日期格式错误时返回 400', async () => {
+  const res = await get('/records?date=nope')
+  assert.equal(res.status, 400)
+  assert.match(await res.text(), /日期格式错误/)
+})
+
+test('可以删除单条记录', async () => {
+  const record = store.insertLive({
+    roomId: 2,
+    roomName: 'B',
+    liveTime: Math.floor(Date.now() / 1000),
+    liveKey: 'del-me',
+  })!
+
+  const res = await post(`/records/${record.id}/delete`, {})
+  assert.equal(res.status, 303)
+  assert.equal(store.get(record.id), null)
+})
+
+// ---------- 房间 CRUD ----------
+
+test('添加房间后出现在列表里', async () => {
+  const res = await post('/rooms', { id: '652581', name: '新增房间' })
+  assert.equal(res.status, 303)
+  assert.equal(res.headers.get('location'), '/rooms')
+
+  const html = await (await get('/rooms')).text()
+  assert.match(html, /新增房间/)
+  assert.match(html, /#652581/)
+})
+
+test('重复房间号不会重复创建', async () => {
+  await post('/rooms', { id: '777' })
+  await post('/rooms', { id: '777', name: '第二次' })
+
+  assert.equal(rooms.get(777)?.name, null)
+})
+
+test('房间号非法时忽略', async () => {
+  for (const id of ['0', '-1', 'abc', '']) {
+    await post('/rooms', { id })
+  }
+  assert.equal(rooms.list().filter((r) => r.id <= 0).length, 0)
+})
+
+test('可以更新房间名与备注', async () => {
+  await post('/rooms', { id: '888' })
+  await post('/rooms/888/update', { name: '改过的名字', note: '备注内容' })
+
+  const room = rooms.get(888)
+  assert.equal(room?.name, '改过的名字')
+  assert.equal(room?.note, '备注内容')
+})
+
+test('可以切换启用状态', async () => {
+  await post('/rooms', { id: '999' })
+  assert.equal(rooms.get(999)?.enabled, true)
+
+  await post('/rooms/999/toggle', {})
+  assert.equal(rooms.get(999)?.enabled, false)
+
+  await post('/rooms/999/toggle', {})
+  assert.equal(rooms.get(999)?.enabled, true)
+})
+
+test('可以删除房间', async () => {
+  await post('/rooms', { id: '1234' })
+  await post('/rooms/1234/delete', {})
+  assert.equal(rooms.get(1234), null)
+})
+
+// ---------- 用户管理 ----------
+
+test('可以新建用户，重复用户名被忽略', async () => {
+  await post('/users', { username: 'second', password: 'password123' })
+  assert.ok(users.findByUsername('second'))
+
+  await post('/users', { username: 'second', password: 'other12345' })
+  // 仍是最初那个（密码没被覆盖）：用原密码能验证通过
+  assert.ok(await users.verify('second', 'password123'))
+})
+
+test('密码太短时不会创建用户', async () => {
+  await post('/users', { username: 'shortpw', password: '123' })
+  assert.equal(users.findByUsername('shortpw'), null)
+})
+
+test('改密码需要校验当前密码', async () => {
+  await post('/users/password', { current: 'wrong', next: 'newpassword123' })
+  // 旧密码仍然有效
+  assert.ok(await users.verify('tester', 'password123'))
+
+  await post('/users/password', { current: 'password123', next: 'newpassword123' })
+  assert.ok(await users.verify('tester', 'newpassword123'))
 })

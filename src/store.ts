@@ -54,7 +54,8 @@ function toRecord(row: Row): LiveRecord {
 const FIELDS = 'id, room_id, room_name, live_time, detected_at, live_key, title, anchor_name'
 
 export class LiveStore {
-  private readonly db: DatabaseSync
+  /** 供 RoomRepo / UserRepo 共用同一个连接 */
+  readonly db: DatabaseSync
 
   constructor(filePath: string) {
     const inMemory = filePath === ':memory:'
@@ -155,6 +156,58 @@ export class LiveStore {
       .get(id) as unknown as Row | undefined
 
     return row ? toRecord(row) : null
+  }
+
+  /** 按 id 取单条记录 */
+  get(id: number): LiveRecord | null {
+    const row = this.db
+      .prepare(`SELECT ${FIELDS} FROM live_records WHERE id = ?`)
+      .get(id) as unknown as Row | undefined
+    return row ? toRecord(row) : null
+  }
+
+  /** 删除单条记录（CRUD 的 D） */
+  delete(id: number): boolean {
+    const result = this.db.prepare('DELETE FROM live_records WHERE id = ?').run(id)
+    return Number(result.changes) > 0
+  }
+
+  /** 按 id 删除一批，返回删除条数 */
+  deleteMany(ids: number[]): number {
+    if (ids.length === 0) return 0
+
+    const placeholders = ids.map(() => '?').join(',')
+    const result = this.db
+      .prepare(`DELETE FROM live_records WHERE id IN (${placeholders})`)
+      .run(...ids)
+
+    return Number(result.changes)
+  }
+
+  /** 分页查询，可选按房间过滤；按开播时间倒序 */
+  page(options: {
+    limit: number
+    offset: number
+    roomId?: number
+  }): { records: LiveRecord[]; total: number } {
+    const where = options.roomId ? 'WHERE room_id = ?' : ''
+    const params = options.roomId ? [options.roomId] : []
+
+    const totalRow = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM live_records ${where}`)
+      .get(...params) as { n: number }
+
+    const rows = this.db
+      .prepare(`
+        SELECT ${FIELDS}
+        FROM live_records
+        ${where}
+        ORDER BY live_time DESC, id DESC
+        LIMIT ? OFFSET ?
+      `)
+      .all(...params, options.limit, options.offset) as unknown as Row[]
+
+    return { records: rows.map(toRecord), total: Number(totalRow.n) }
   }
 
   /** 删除 live_time 早于指定时间（Unix 秒）的记录，返回删除条数 */

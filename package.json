@@ -8,15 +8,18 @@
     "bls": "src/cli.ts"
   },
   "scripts": {
-    "start": "tsx src/cli.ts watch",
-    "serve": "tsx src/cli.ts serve",
+    "dev": "tsx src/cli.ts web",
+    "start": "tsx src/cli.ts start",
+    "web": "tsx src/cli.ts web",
+    "listen": "tsx src/cli.ts listen",
+    "user:add": "tsx src/cli.ts user:add",
+    "user:list": "tsx src/cli.ts user:list",
     "list": "tsx src/cli.ts list",
     "today": "tsx src/cli.ts today",
     "rooms": "tsx src/cli.ts rooms",
-    "seed": "tsx src/seed.ts",
+    "info": "tsx src/cli.ts info",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts",
-    "info": "tsx src/cli.ts info"
+    "test": "tsx --test test/*.test.ts"
   },
   "keywords": [
     "bilibili",
@@ -25,8 +28,9 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@hono/node-server": "^2.1.6",
     "dotenv": "^18.0.9",
-    "smol-toml": "^1.9.1",
+    "hono": "^4.13.17",
     "tiny-bilibili-ws": "^1.1.1"
   },
   "devDependencies": {
@@ -39,6 +43,7 @@
   },
   "packageManager": "pnpm@12.18.0",
   "files": [
-    "src"
+    "src",
+    "web"
   ]
 }
