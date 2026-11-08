@@ -231,7 +231,7 @@ export class LiveStore {
   }
 
   /**
-   * 给定时间区间内的记录，按开播时间从早到晚。
+   * 给定时间区间内的记录，按开播时间**从新到旧**。
    * 区间为「左闭右开」：start <= live_time < end
    */
   recordsBetween(start: number, end: number): LiveRecord[] {
@@ -240,7 +240,7 @@ export class LiveStore {
         SELECT ${FIELDS}
         FROM live_records
         WHERE live_time >= ? AND live_time < ?
-        ORDER BY live_time ASC, id ASC
+        ORDER BY live_time DESC, id DESC
       `)
       .all(start, end) as unknown as Row[]
 

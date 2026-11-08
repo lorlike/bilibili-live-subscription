@@ -24,7 +24,7 @@ test('shiftDate 跨月', () => {
   assert.equal(shiftDate(new Date(2026, 11, 31), 1).getDate(), 1)
 })
 
-test('recordsBetween 只返回当天区间，按时间正序', () => {
+test('recordsBetween 只返回当天区间，按时间从新到旧', () => {
   const store = new LiveStore(':memory:')
   try {
     const range = dayRange(new Date(2026, 10, 7))
@@ -37,7 +37,7 @@ test('recordsBetween 只返回当天区间，按时间正序', () => {
     const records = store.recordsBetween(range.start, range.end)
     assert.deepEqual(
       records.map((r) => r.liveKey),
-      ['first', 'mid', 'last'],
+      ['last', 'mid', 'first'],
     )
   } finally {
     store.close()
@@ -57,15 +57,20 @@ test('recordsAfter 只返回游标之后的记录', () => {
       })
     }
 
+    // recordsAfter 按 id 升序做增量查询，与页面排序无关，
+    // 这里用固定游标验证它本身的语义
     const all = store.recordsBetween(range.start, range.end)
-    const cursor = all[1]!.id
-    const after = store.recordsAfter(cursor, range.start, range.end)
+    assert.equal(all.length, 5)
 
+    const after = store.recordsAfter(2, range.start, range.end)
     assert.deepEqual(
       after.map((r) => r.liveKey),
       ['k2', 'k3', 'k4'],
     )
-    assert.deepEqual(store.recordsAfter(all.at(-1)!.id, range.start, range.end), [])
+
+    const maxId = store.maxIdInRange(range.start, range.end)
+    assert.equal(maxId, 5)
+    assert.deepEqual(store.recordsAfter(maxId, range.start, range.end), [])
   } finally {
     store.close()
   }

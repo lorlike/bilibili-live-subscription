@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { Hono } from 'hono'
 import { jsxRenderer } from 'hono/jsx-renderer'
 import { signJwt, verifyJwt } from './auth/jwt.ts'
+import { LoginRateLimiter } from './auth/rate-limit.ts'
 import { LoginPage } from '../web/ssr/LoginPage.tsx'
 import { RecordsPage } from '../web/ssr/RecordsPage.tsx'
 import { RoomsPage } from '../web/ssr/RoomsPage.tsx'
@@ -58,6 +59,11 @@ export class WebServer {
   private readonly host: string
   private readonly http: Hono<{ Variables: JwtVariables }>
   private server: { close: (cb: () => void) => void } | null = null
+  private readonly limiter = new LoginRateLimiter({
+    maxFailures: 5,
+    windowMs: 5 * 60 * 1000,
+    blockMs: 15 * 60 * 1000,
+  })
 
   constructor(options: WebServerOptions) {
     this.options = options
@@ -106,16 +112,41 @@ export class WebServer {
     app.get('/login', (c) => c.render(<LoginPage />))
 
     app.post('/login', async (c) => {
+      const clientKey = clientIp(c)
+      this.limiter.sweep()
+
+      const gate = this.limiter.check(clientKey)
+      if (gate.blocked) {
+        c.header('Retry-After', String(gate.retryAfter))
+        c.status(429)
+        return c.render(
+          <LoginPage error={`尝试次数过多，请 ${gate.retryAfter} 秒后再试`} />,
+        )
+      }
+
       const body = await c.req.parseBody()
       const username = String(body.username ?? '').trim()
       const password = String(body.password ?? '')
 
       const user = await users.verify(username, password)
       if (!user) {
+        const failed = this.limiter.recordFailure(clientKey)
         // 重新渲染登录页并带上错误，不重定向（保留用户输入的用户名）
-        c.status(401)
-        return c.render(<LoginPage error="用户名或密码错误" username={username} />)
+        c.status(failed.blocked ? 429 : 401)
+        if (failed.blocked) c.header('Retry-After', String(failed.retryAfter))
+        return c.render(
+          <LoginPage
+            error={
+              failed.blocked
+                ? `尝试次数过多，请 ${failed.retryAfter} 秒后再试`
+                : '用户名或密码错误'
+            }
+            username={username}
+          />,
+        )
       }
+
+      this.limiter.recordSuccess(clientKey)
 
       const token = await signJwt(
         { sub: user.id, username: user.username },
@@ -359,6 +390,23 @@ export class WebServer {
 }
 
 // ---------- 工具 ----------
+
+/**
+ * 客户端 IP。默认只信 X-Forwarded-For 的第一段；
+ * 但只有显式设置 TRUST_PROXY=1 时才读它（否则任何人都能伪造该头绕过限流）。
+ */
+function clientIp(c: Context): string {
+  if (process.env.TRUST_PROXY === '1') {
+    const forwarded = c.req.header('x-forwarded-for')
+    if (forwarded) return forwarded.split(',')[0]!.trim()
+  }
+
+  // @hono/node-server 会把 socket 地址放在 env 里
+  const addr = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)
+    ?.incoming?.socket?.remoteAddress
+
+  return addr ?? 'unknown'
+}
 
 function getCookie(header: string | undefined, name: string): string | null {
   if (!header) return null

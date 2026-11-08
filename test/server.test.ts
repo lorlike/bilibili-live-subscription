@@ -186,7 +186,13 @@ test('记录页渲染出当天记录，用 details 实现展开', async () => {
   assert.match(html, /<details class="row rec-row"/)
   assert.match(html, /测试房间/)
   assert.match(html, /1–3 \/ 3/)
-  assert.match(html, /标题0/)
+
+  // 从上到下由新到旧：标题2 → 标题1 → 标题0
+  const i2 = html.indexOf('标题2')
+  const i1 = html.indexOf('标题1')
+  const i0 = html.indexOf('标题0')
+  assert.ok(i2 >= 0 && i1 >= 0 && i0 >= 0)
+  assert.ok(i2 < i1 && i1 < i0, `顺序应为 2,1,0，实际位置 ${i2},${i1},${i0}`)
 })
 
 test('日期格式错误时返回 400', async () => {

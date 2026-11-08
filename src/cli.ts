@@ -209,9 +209,11 @@ async function ensureFirstUser(users: UserRepo): Promise<void> {
 
   await users.create('admin', password)
 
-  logger.warn(
+  // 必须无条件输出：LOG_LEVEL=error 时 logger.warn 会被过滤，
+  // 那样用户永远拿不到初始密码、也登不进系统。
+  console.error(
     [
-      '首次启动：已创建管理员账号',
+      '[bls] 首次启动：已创建管理员账号',
       '  用户名: admin',
       `  密码:   ${password}`,
       '  请登录后立即修改密码（或用 pnpm user:add 另建账号后删除它）',

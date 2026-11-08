@@ -12,7 +12,7 @@ function DetailLine({ label, value }: { label: string; value: string }) {
 }
 
 /** 单行记录：用 <details> 实现展开，无需 JS */
-const RecordRow: FC<{ record: LiveRecord; next: LiveRecord | null }> = ({ record, next }) => {
+const RecordRow: FC<{ record: LiveRecord }> = ({ record }) => {
   const delay = Math.max(0, Math.round(record.detectedAt / 1000 - record.liveTime))
 
   return (
@@ -24,7 +24,7 @@ const RecordRow: FC<{ record: LiveRecord; next: LiveRecord | null }> = ({ record
           <span class="name-text">{record.roomName}</span>
           <span class="room-id">#{record.roomId}</span>
         </span>
-        <span class="meta">{durationOf(record, next)}</span>
+        <span class="meta">{durationOf(record)}</span>
         <span class="chev">▸</span>
       </summary>
 
@@ -92,8 +92,8 @@ export const RecordsPage: FC<{
         </div>
       ) : (
         <div class="lines">
-          {records.map((record, index) => (
-            <RecordRow record={record} next={records[index + 1] ?? null} />
+          {records.map((record) => (
+            <RecordRow record={record} />
           ))}
         </div>
       )}

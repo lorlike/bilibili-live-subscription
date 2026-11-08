@@ -45,23 +45,21 @@ export function agoString(unixSeconds: number | null): string {
 }
 
 /**
- * 开播时长：下一条记录之前视为一场。
- * 最后一条用当前时间推算；若开播时间还在未来（时钟偏差）则显示 —。
+ * 「距今」时长：这条开播距现在过了多久。
+ * 列表按新→旧排列，所以用它比「距上一条的间隔」更直观。
  */
-export function durationOf(record: { liveTime: number }, next: { liveTime: number } | null): string {
-  const now = Math.floor(Date.now() / 1000)
-  const end = next ? next.liveTime : now
-  const secs = end - record.liveTime
-
+export function durationOf(record: { liveTime: number }): string {
+  const secs = Math.floor(Date.now() / 1000) - record.liveTime
   if (secs <= 0) return '—'
 
-  const h = Math.floor(secs / 3600)
+  const d = Math.floor(secs / 86400)
+  const h = Math.floor((secs % 86400) / 3600)
   const m = Math.floor((secs % 3600) / 60)
-  const s = secs % 60
 
-  if (h > 0) return `${h}h${pad(m)}m`
-  if (m > 0) return `${m}m${pad(s)}s`
-  return `${s}s`
+  if (d > 0) return `${d}天前`
+  if (h > 0) return `${h}h${pad(m)}m前`
+  if (m > 0) return `${m}m前`
+  return '刚刚'
 }
 
 export function shiftDateString(date: string, days: number): string {

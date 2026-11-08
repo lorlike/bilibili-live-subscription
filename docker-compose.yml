@@ -1,0 +1,58 @@
+services:
+  bls:
+    build: .
+    image: bls:latest
+    container_name: bls
+    restart: unless-stopped
+
+    ports:
+      # 默认监听所有网卡，可直接外网访问 http://<服务器IP>:3000
+      # 只想本机访问（走 nginx / caddy 反代）时，在 .env 里设 BIND_IP=127.0.0.1
+      # 端口用 HOST_PORT 覆盖，例如 8080:3000
+      - '${BIND_IP:-0.0.0.0}:${HOST_PORT:-3000}:3000'
+
+    environment:
+      # ---- B 站 ----
+      BILIBILI_COOKIE: ${BILIBILI_COOKIE:?需要在 .env 里设置 BILIBILI_COOKIE}
+      # 必须为 0；非 0 会被弹幕服务器直接断开（close 1006）
+      UID: ${UID:-0}
+
+      # ---- 存储 ----
+      DB_PATH: /app/data/live.db
+      RETENTION_DAYS: ${RETENTION_DAYS:-0}
+
+      # ---- 监听行为 ----
+      RECONNECT_TIME: ${RECONNECT_TIME:-5000}
+      HEARTBEAT_TIME: ${HEARTBEAT_TIME:-30000}
+      SYNC_INTERVAL_MS: ${SYNC_INTERVAL_MS:-5000}
+
+      # ---- Web ----
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: '3000'
+      JWT_SECRET: ${JWT_SECRET:?需要在 .env 里设置 JWT_SECRET（openssl rand -hex 32）}
+      JWT_TTL_HOURS: ${JWT_TTL_HOURS:-24}
+      # 走 https 反代时设为 1
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      # 只在前面确实有可信反向代理时才设 1，否则客户端可伪造
+      # X-Forwarded-For 绕过登录限流
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # 影响「当天」的边界，不设会用 UTC
+      TZ: ${TZ:-Asia/Shanghai}
+
+    volumes:
+      # 数据库持久化（容器重建不丢数据）
+      - bls-data:/app/data
+
+    # 优雅关闭：给 SQLite flush + WAL checkpoint 留时间
+    stop_grace_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  bls-data:
